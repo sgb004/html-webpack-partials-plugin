@@ -4,8 +4,6 @@ const Partial = require('./lib/partial');
 const path = require('path');
 const Util = require('./lib/util');
 
-//const loader = require('html-webpack-plugin').loader;
-
 /**
  * HtmlWebpackPartialsPlugin
  * @description Webpack plugin based on HTML Webpack Plugin that allows partial injection into the compiled HTML
@@ -37,6 +35,8 @@ class HtmlWebpackPartialsPlugin {
 	compiler.hooks.make.tapAsync(
 		'HtmlWebpackPartialsPlugin',
 		(mainCompilation, callback) => {
+			const loaderPath = require.resolve('html-webpack-plugin/lib/loader');
+
 			// CODE EXTRACT FROM html-webpack-plugin/lib/child-compiler.js
 			const NodeTemplatePlugin = webpack.node.NodeTemplatePlugin;
 			const NodeTargetPlugin = webpack.node.NodeTargetPlugin;
@@ -73,7 +73,7 @@ class HtmlWebpackPartialsPlugin {
 			this.partial_collection.forEach(partial => {
 				new EntryPlugin(childCompiler.context, 'data:text/javascript,__webpack_public_path__ = __webpack_base_uri__ = htmlWebpackPartialsPluginPublicPath;',partial.unique_name).apply(childCompiler);
 
-				new EntryPlugin(childCompiler.context, '/media/sgb004/2TB/www/html-webpack-partials-plugin/node_modules/html-webpack-plugin/lib/loader.js!'+partial.path, partial.unique_name).apply(childCompiler);
+				new EntryPlugin(childCompiler.context, `${loaderPath}!${partial.path}`, partial.unique_name).apply(childCompiler);
 			});
 
 			childCompiler.hooks.thisCompilation.tap('HtmlWebpackPartialsPlugin', (compilation) => {
@@ -88,7 +88,7 @@ class HtmlWebpackPartialsPlugin {
 						if (assets[temporaryTemplateName]) {
 							const publicPath = this.getPublicPath(mainCompilation, temporaryTemplateName);
 
-							const source = this.getHTMLSource(assets[temporaryTemplateName].source(), partial, publicPath);
+							const source = this.getHTMLSource(assets[temporaryTemplateName].source(), partial, publicPath, compilation);
 							partial.createTemplate(source);
 							compilation.deleteAsset(temporaryTemplateName);
 						}
@@ -166,6 +166,7 @@ class HtmlWebpackPartialsPlugin {
 	const vmScript = new vm.Script(source, { filename: partial.path });
 
 	let newSource;
+
 	try {
 		newSource = vmScript.runInContext(vmContext);
 	} catch (e) {
@@ -174,11 +175,33 @@ class HtmlWebpackPartialsPlugin {
 
 	if (typeof newSource === 'object' && newSource.__esModule && newSource.default) {
 		newSource = newSource.default;
+	}else if(typeof newSource === 'function'){
+		newSource = newSource(partial.options);
 	}
 
-	return typeof newSource === 'string' || typeof newSource === 'function'
-	? Promise.resolve(newSource)
-	: Promise.reject('The loader "' + partial.path + '" didn\'t return html.');
+	return new Promise((resolve, reject) => {
+		if(typeof newSource == 'string'){
+			//Minify html because HTMLWebpackPlugin minify the html
+			try {
+				const minifyOptions = {
+					collapseWhitespace: true,
+					keepClosingSlash: true,
+					removeComments: true,
+					removeRedundantAttributes: true,
+					removeScriptTypeAttributes: true,
+					removeStyleLinkTypeAttributes: true,
+					useShortDoctype: true
+				}
+				require('html-minifier-terser').minify(newSource, minifyOptions).then(
+					newSource => resolve(newSource)
+				)
+			} catch (e) {
+				return reject(e);
+			}
+		}else{
+			reject('The loader "' + partial.path + '" didn\'t return html.');
+		}
+	});
   }
 
   	// CODE EXTRACT FROM html-webpack-plugin/index.js with a few minor modifications 
